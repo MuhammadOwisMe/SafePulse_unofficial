@@ -5,21 +5,23 @@ import { onAuthStateChanged } from "firebase/auth";
 import {
   AlertCircle,
   Bell,
-  Flame,
   Home as HomeIcon,
   Map as MapIcon,
   Smartphone,
   User,
   Users,
+  XCircle,
 } from "lucide-react-native";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
+  Alert,
   Platform,
   ScrollView,
   StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
+  Vibration,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -28,8 +30,13 @@ import { auth } from "../firebaseConfig";
 export default function Home() {
   const router = useRouter();
   const [userName, setUserName] = useState("User");
-  const [isTriggered, setIsTriggered] = useState(false); // Fix: Multiple alerts lock
 
+  // --- SOS & Countdown States ---
+  const [isCountingDown, setIsCountingDown] = useState(false);
+  const [timer, setTimer] = useState(5);
+  const isProcessing = useRef(false);
+
+  // Auth Listener
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
@@ -43,21 +50,25 @@ export default function Home() {
     return () => unsubscribe();
   }, []);
 
-  const triggerSnatchingMode = async () => {
-    if (isTriggered) return; // Dubara trigger hone se rokay ga
+  // 1. Final SOS Execution
+  const executeFinalSOS = async () => {
+    Vibration.cancel();
+    setIsCountingDown(false);
+    isProcessing.current = true;
 
-    setIsTriggered(true);
-    console.log("🚨 SOS Triggered!");
+    Vibration.vibrate([500, 200, 500]);
 
     try {
       let { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") {
-        console.log("Location permission denied");
-        setIsTriggered(false);
+        Alert.alert("Permission Denied", "Location access is required.");
+        resetSOS();
         return;
       }
 
-      let location = await Location.getCurrentPositionAsync({});
+      let location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
 
       const response = await fetch(
         "http://192.168.100.111:3000/api/sos/trigger",
@@ -65,53 +76,111 @@ export default function Home() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            userId: userName,
+            userId: auth.currentUser?.uid || "anonymous",
             location: {
               lat: location.coords.latitude,
               long: location.coords.longitude,
             },
             type: "Snatching (Shake Detected)",
+            status: "active",
           }),
         },
       );
 
       if (response.ok) {
-        console.log("✅ Alert Logged to Firestore!");
-        router.push("/TheftAlert" as any);
+        router.push("/TheftAlert");
+      } else {
+        throw new Error("Server error");
       }
     } catch (error) {
-      console.log("SOS Trigger Error:", error);
-    } finally {
-      // 5 second baad lock khulega
-      setTimeout(() => setIsTriggered(false), 5000);
+      console.error("SOS Trigger Error:", error);
+      Alert.alert("Error", "Check connection and try again.");
+      resetSOS();
     }
   };
 
+  // 2. Trigger function
+  const triggerSnatchingMode = () => {
+    if (isCountingDown || isProcessing.current) return;
+    setTimer(5);
+    setIsCountingDown(true);
+    Vibration.vibrate(500);
+  };
+
+  // 3. Countdown Logic (Strict TS Fix)
   useEffect(() => {
-    const SHAKE_THRESHOLD = 2.0;
+    let interval: any = null;
+
+    if (isCountingDown && timer > 0) {
+      interval = setInterval(() => {
+        setTimer((prev) => prev - 1);
+      }, 1000);
+    } else if (isCountingDown && timer === 0) {
+      executeFinalSOS();
+    }
+
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [isCountingDown, timer]);
+
+  const cancelSOS = () => {
+    resetSOS();
+    Vibration.cancel();
+    Alert.alert("SafePulse", "Emergency alert cancelled.");
+  };
+
+  const resetSOS = () => {
+    setIsCountingDown(false);
+    isProcessing.current = false;
+    setTimer(5);
+  };
+
+  // 4. Shake Detection logic
+  useEffect(() => {
+    const SHAKE_THRESHOLD = 12.0;
     const subscription = Accelerometer.addListener((data) => {
       const { x, y, z } = data;
       const acceleration = Math.sqrt(x * x + y * y + z * z);
-
-      if (acceleration > SHAKE_THRESHOLD && !isTriggered) {
+      if (
+        acceleration > SHAKE_THRESHOLD &&
+        !isCountingDown &&
+        !isProcessing.current
+      ) {
         triggerSnatchingMode();
       }
     });
-
     Accelerometer.setUpdateInterval(100);
-    return () => subscription.remove(); // Cleanup when leaving screen
-  }, [userName, isTriggered]);
+    return () => subscription.remove();
+  }, [isCountingDown]);
 
   return (
     <SafeAreaView style={styles.container} edges={["bottom", "left", "right"]}>
       <StatusBar barStyle="light-content" backgroundColor="#161E2E" />
+
+      {isCountingDown && (
+        <View style={styles.overlay}>
+          <View style={styles.overlayContent}>
+            <AlertCircle size={100} color="#fff" />
+            <Text style={styles.overlayTitle}>EMERGENCY ALERT</Text>
+            <Text style={styles.overlaySub}>Notifying contacts in...</Text>
+            <Text style={styles.timerText}>{timer}</Text>
+            <TouchableOpacity style={styles.cancelBtn} onPress={cancelSOS}>
+              <XCircle size={24} color="#ef4444" />
+              <Text style={styles.cancelBtnText}>I AM SAFE (CANCEL)</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
       <View style={styles.header}>
         <View style={styles.headerTop}>
           <View>
             <Text style={styles.greetText}>Stay Safe,</Text>
             <Text style={styles.userName}>{userName}</Text>
           </View>
-          <View style={styles.headerIcons}>
+          {/* FIXED: DIV REPLACED WITH VIEW HERE */}
+          <View style={styles.headerIconsContainer}>
             <TouchableOpacity
               style={styles.iconCircle}
               onPress={() => router.push("/Profile")}
@@ -126,7 +195,7 @@ export default function Home() {
         </View>
         <View style={styles.statusBanner}>
           <View style={styles.statusDot} />
-          <Text style={styles.statusText}>Safe Mode Active</Text>
+          <Text style={styles.statusText}>SafePulse Protection Active</Text>
         </View>
       </View>
 
@@ -143,15 +212,14 @@ export default function Home() {
             <View style={styles.sosInner}>
               <AlertCircle size={50} color="#fff" />
               <Text style={styles.sosText}>SOS</Text>
-              <Text style={styles.sosSubText}>TAP FOR HELP</Text>
-              <Text style={styles.sosCategory}>General / Fire / Disaster</Text>
+              <Text style={styles.sosSubText}>TAP OR SHAKE</Text>
             </View>
           </TouchableOpacity>
         </View>
 
         <View style={styles.sectionHeader}>
           <Smartphone size={18} color="#2563eb" />
-          <Text style={styles.sectionTitle}>Gesture Detection</Text>
+          <Text style={styles.sectionTitle}>Smart Detection</Text>
         </View>
 
         <TouchableOpacity
@@ -161,40 +229,38 @@ export default function Home() {
           <View style={styles.theftIconCircle}>
             <AlertCircle size={24} color="#ef4444" />
           </View>
+          {/* FIXED: DIV REPLACED WITH VIEW HERE */}
           <View style={styles.theftInfo}>
             <Text style={styles.theftTitle}>🚨 Theft / Snatching</Text>
             <Text style={styles.theftSub}>
-              Shake phone or tap for immediate alert
+              Shake phone to trigger 5s countdown
             </Text>
           </View>
         </TouchableOpacity>
 
         <View style={styles.sectionHeader}>
           <AlertCircle size={18} color="#ef4444" />
-          <Text style={styles.sectionTitle}>Report Manually</Text>
+          <Text style={styles.sectionTitle}>Emergency Services</Text>
         </View>
 
         <View style={styles.manualGrid}>
           <TouchableOpacity
             style={[styles.manualCard, { backgroundColor: "#ef4444" }]}
           >
-            <AlertCircle size={28} color="#fff" />
             <Text style={styles.manualLabel}>Police</Text>
             <Text style={styles.manualCode}>15</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.manualCard, { backgroundColor: "#9333ea" }]}
           >
-            <Flame size={28} color="#fff" />
             <Text style={styles.manualLabel}>Fire</Text>
             <Text style={styles.manualCode}>16</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.manualCard, { backgroundColor: "#166534" }]}
           >
-            <Users size={28} color="#fff" />
-            <Text style={styles.manualLabel}>Ambulance</Text>
-            <Text style={styles.manualCode}>1020</Text>
+            <Text style={styles.manualLabel}>Edhi</Text>
+            <Text style={styles.manualCode}>115</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -234,7 +300,43 @@ export default function Home() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#fff" },
+  container: { flex: 1, backgroundColor: "#f8fafc" },
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(220, 38, 38, 0.98)",
+    zIndex: 10000,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  overlayContent: { alignItems: "center", width: "100%" },
+  overlayTitle: {
+    color: "#fff",
+    fontSize: 32,
+    fontWeight: "900",
+    marginTop: 20,
+  },
+  overlaySub: { color: "#fff", fontSize: 16, opacity: 0.8 },
+  timerText: {
+    color: "#fff",
+    fontSize: 120,
+    fontWeight: "900",
+    marginVertical: 20,
+  },
+  cancelBtn: {
+    flexDirection: "row",
+    backgroundColor: "#fff",
+    paddingHorizontal: 30,
+    paddingVertical: 18,
+    borderRadius: 50,
+    alignItems: "center",
+    elevation: 10,
+  },
+  cancelBtnText: {
+    color: "#ef4444",
+    fontWeight: "900",
+    fontSize: 16,
+    marginLeft: 10,
+  },
   header: {
     backgroundColor: "#161E2E",
     paddingHorizontal: 20,
@@ -248,6 +350,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
   },
+  headerIconsContainer: { flexDirection: "row" },
   greetText: { color: "#94a3b8", fontSize: 14 },
   userName: {
     color: "#fff",
@@ -255,7 +358,6 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     textTransform: "capitalize",
   },
-  headerIcons: { flexDirection: "row" },
   iconCircle: {
     width: 40,
     height: 40,
@@ -296,30 +398,19 @@ const styles = StyleSheet.create({
   },
   statusText: { color: "#22c55e", fontSize: 13, fontWeight: "700" },
   scrollContent: { paddingBottom: 110 },
-  sosContainer: { alignItems: "center", marginVertical: 40 },
+  sosContainer: { alignItems: "center", marginVertical: 30 },
   sosOuter: {
-    width: 230,
-    height: 230,
-    borderRadius: 115,
+    width: 200,
+    height: 200,
+    borderRadius: 100,
     backgroundColor: "#dc2626",
     justifyContent: "center",
     alignItems: "center",
     elevation: 15,
-    shadowColor: "#dc2626",
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.5,
-    shadowRadius: 16,
   },
   sosInner: { alignItems: "center" },
-  sosText: { color: "#fff", fontSize: 40, fontWeight: "900", marginTop: 5 },
-  sosSubText: {
-    color: "#fff",
-    fontSize: 12,
-    fontWeight: "bold",
-    opacity: 0.9,
-    letterSpacing: 1,
-  },
-  sosCategory: { color: "#fff", fontSize: 10, marginTop: 10, opacity: 0.7 },
+  sosText: { color: "#fff", fontSize: 42, fontWeight: "900", marginTop: 5 },
+  sosSubText: { color: "#fff", fontSize: 12, fontWeight: "bold", opacity: 0.9 },
   sectionHeader: {
     flexDirection: "row",
     alignItems: "center",
@@ -340,13 +431,7 @@ const styles = StyleSheet.create({
     padding: 20,
     borderRadius: 20,
     elevation: 4,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#f1f5f9",
   },
   theftIconCircle: {
     width: 54,
@@ -363,38 +448,28 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     paddingHorizontal: 20,
-    marginTop: 5,
   },
   manualCard: {
     flex: 0.31,
-    height: 135,
+    height: 110,
     borderRadius: 20,
     justifyContent: "center",
     alignItems: "center",
     elevation: 5,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 6,
   },
-  manualLabel: {
-    color: "#fff",
-    fontWeight: "bold",
-    marginTop: 12,
-    fontSize: 15,
-  },
-  manualCode: { color: "#fff", fontSize: 12, opacity: 0.85, marginTop: 2 },
+  manualLabel: { color: "#fff", fontWeight: "bold", fontSize: 14 },
+  manualCode: { color: "#fff", fontSize: 12, opacity: 0.85 },
   bottomTab: {
     position: "absolute",
     bottom: 0,
     flexDirection: "row",
     backgroundColor: "#fff",
-    paddingVertical: 14,
+    paddingVertical: 12,
     borderTopWidth: 1,
     borderTopColor: "#f1f5f9",
     justifyContent: "space-around",
     width: "100%",
   },
   tabItem: { alignItems: "center" },
-  tabText: { fontSize: 11, color: "#94a3b8", marginTop: 6, fontWeight: "500" },
+  tabText: { fontSize: 11, color: "#94a3b8", marginTop: 4, fontWeight: "500" },
 });

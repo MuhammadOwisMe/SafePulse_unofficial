@@ -1,55 +1,196 @@
+import * as Location from "expo-location";
 import { useRouter } from "expo-router";
+import { getAuth } from "firebase/auth";
 import {
-    AlertTriangle,
-    CheckCircle,
-    Mail,
-    MapPin,
-    Mic,
-    Phone,
+  AlertTriangle,
+  CheckCircle,
+  Mail,
+  MapPin,
+  Phone,
 } from "lucide-react-native";
-import React, { useEffect } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function TheftAlert() {
   const router = useRouter();
+  const auth = getAuth();
+
+  // States
+  const [countdown, setCountdown] = useState(5);
+  const [isActivated, setIsActivated] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [isLiveOnMap, setIsLiveOnMap] = useState(false);
+  const [isEnding, setIsEnding] = useState(false);
+
+  // CRITICAL FIX: Lock mechanism to prevent multiple API calls
+  const isProcessingTrigger = useRef(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    // Screen khulte hi email bhejane ka function
-    sendAlertEmails();
-  }, []);
+    // 1. Run countdown
+    if (countdown > 0 && !isActivated) {
+      timerRef.current = setTimeout(() => {
+        setCountdown((prev) => prev - 1);
+      }, 1000);
+    }
+    // 2. Trigger when hits zero
+    else if (countdown === 0 && !isActivated) {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
 
-  const sendAlertEmails = async () => {
+      // Only trigger if not already processing
+      if (!isProcessingTrigger.current) {
+        setIsActivated(true);
+        triggerEmergencyFlow();
+      }
+    }
+
+    // Cleanup on unmount
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, [countdown, isActivated]);
+
+  const handleCancel = () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    router.replace("/home");
+  };
+
+  const triggerEmergencyFlow = async () => {
+    // PREVENT DUPLICATES: If already sending, stop here.
+    if (isProcessingTrigger.current) return;
+
+    isProcessingTrigger.current = true;
+    setLoading(true);
+
+    console.log("🚀 SOS Triggered: Sending single request...");
+
     try {
-      // Ye endpoint aapke trusted contacts ko email trigger karega
-      await fetch("http://192.168.100.111:3000/api/sos/send-emails", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: "farazzz" }), // User ID backend ko bhejein
-      });
-      console.log("📧 Alert Emails Triggered");
+      const user = auth.currentUser;
+      if (!user) {
+        isProcessingTrigger.current = false;
+        return;
+      }
+
+      // Get Current Location
+      let { status } = await Location.requestForegroundPermissionsAsync();
+      let coords = { lat: 24.8607, long: 67.0011 }; // Default Karachi center
+
+      if (status === "granted") {
+        const location = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.High,
+        });
+        coords = {
+          lat: location.coords.latitude,
+          long: location.coords.longitude,
+        };
+      }
+
+      // Call Backend API
+      const response = await fetch(
+        "http://192.168.100.111:3000/api/sos/trigger",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userId: user.uid,
+            type: "Theft Alert",
+            location: coords,
+            status: "active",
+            timestamp: new Date().toISOString(),
+          }),
+        },
+      );
+
+      const data = await response.json();
+      if (data.success) {
+        setIsLiveOnMap(true);
+        console.log("✅ SOS Synced Successfully with ID:", data.alertId);
+      } else {
+        throw new Error(data.message || "Failed to sync");
+      }
     } catch (error) {
-      console.log("Email trigger error:", error);
+      console.log("❌ SOS Trigger Error:", error);
+      // Re-enable trigger only if it actually failed
+      isProcessingTrigger.current = false;
+      Alert.alert(
+        "Connection Error",
+        "Could not sync alert. Please check your internet.",
+      );
+    } finally {
+      setLoading(false);
     }
   };
 
+  const handleEndEmergency = async () => {
+    setIsEnding(true);
+    try {
+      const user = auth.currentUser;
+      if (user) {
+        await fetch("http://192.168.100.111:3000/api/sos/end", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userId: user.uid }),
+        });
+      }
+      // Reset everything and go home
+      isProcessingTrigger.current = false;
+      router.replace("/home");
+    } catch (error) {
+      console.log("❌ End Emergency Error:", error);
+      router.replace("/home");
+    }
+  };
+
+  // SCREEN 1: Countdown
+  if (!isActivated) {
+    return (
+      <View style={styles.countdownContainer}>
+        <Text style={styles.timerNumber}>{countdown}</Text>
+        <Text style={styles.timerTitle}>Activating Emergency Alert</Text>
+        <Text style={styles.timerSub}>Press cancel if this was a mistake</Text>
+        <TouchableOpacity style={styles.cancelBtn} onPress={handleCancel}>
+          <Text style={styles.cancelBtnText}>Cancel Alert</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  // SCREEN 2: Active Alert
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={styles.alertHeader}>
           <AlertTriangle size={60} color="#ef4444" />
           <Text style={styles.alertTitle}>Theft Alert ACTIVE</Text>
-          <Text style={styles.alertSub}>Help is on the way</Text>
+          <View style={styles.subTextContainer}>
+            <Text
+              style={[styles.alertSub, isLiveOnMap && { color: "#22c55e" }]}
+            >
+              {loading
+                ? "Establishing Connection..."
+                : isLiveOnMap
+                  ? "● Live Broadcast on Security Map"
+                  : "Syncing Data..."}
+            </Text>
+          </View>
         </View>
 
         <View style={styles.cardContainer}>
-          {/* GPS Location */}
           <View style={styles.statusItem}>
             <View style={[styles.iconCircle, { backgroundColor: "#166534" }]}>
               <MapPin size={24} color="#fff" />
@@ -58,56 +199,73 @@ export default function TheftAlert() {
               <Text style={styles.statusTitle}>GPS Location Shared</Text>
               <Text style={styles.statusSubText}>Live tracking active</Text>
             </View>
-            <CheckCircle size={20} color="#22c55e" />
+            {isLiveOnMap ? (
+              <CheckCircle size={20} color="#22c55e" />
+            ) : (
+              <ActivityIndicator size="small" color="#94a3b8" />
+            )}
           </View>
 
-          {/* Email Alert - NEW */}
           <View style={styles.statusItem}>
             <View style={[styles.iconCircle, { backgroundColor: "#ea580c" }]}>
               <Mail size={24} color="#fff" />
             </View>
             <View style={styles.statusTextContainer}>
-              <Text style={styles.statusTitle}>Trusted Contacts Notified</Text>
-              <Text style={styles.statusSubText}>
-                Emails sent with live location
-              </Text>
+              <Text style={styles.statusTitle}>Contacts Notified</Text>
+              <Text style={styles.statusSubText}>Email alerts dispatched</Text>
             </View>
             <CheckCircle size={20} color="#22c55e" />
           </View>
-
-          {/* Recording */}
-          <View style={styles.statusItem}>
-            <View style={[styles.iconCircle, { backgroundColor: "#991b1b" }]}>
-              <Mic size={24} color="#fff" />
-            </View>
-            <View style={styles.statusTextContainer}>
-              <Text style={styles.statusTitle}>Audio Evidence</Text>
-              <Text style={styles.statusSubText}>
-                Background recording active...
-              </Text>
-            </View>
-            <View style={styles.recordingPulse} />
-          </View>
         </View>
 
-        <TouchableOpacity style={styles.callButton}>
+        <TouchableOpacity
+          style={styles.callButton}
+          onPress={() =>
+            Alert.alert("Emergency", "Connecting to Police (15)...")
+          }
+        >
           <Phone size={20} color="#fff" />
           <Text style={styles.buttonText}>Call Police (15)</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={styles.endButton}
-          onPress={() => router.push("/home")}
+          style={[styles.endButton, isEnding && { opacity: 0.6 }]}
+          onPress={handleEndEmergency}
+          disabled={isEnding}
         >
-          <Text style={styles.endButtonText}>✕ End Emergency Alert</Text>
+          {isEnding ? (
+            <ActivityIndicator color="#94a3b8" />
+          ) : (
+            <Text style={styles.endButtonText}>✕ End Emergency</Text>
+          )}
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-// ... Styles (Puraane wale hi use honge) ...
 const styles = StyleSheet.create({
+  countdownContainer: {
+    flex: 1,
+    backgroundColor: "#ef4444",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  timerNumber: { fontSize: 120, fontWeight: "bold", color: "#fff" },
+  timerTitle: {
+    fontSize: 24,
+    fontWeight: "bold",
+    color: "#fff",
+    marginTop: 20,
+  },
+  timerSub: { fontSize: 16, color: "rgba(255,255,255,0.8)", marginBottom: 40 },
+  cancelBtn: {
+    backgroundColor: "#fff",
+    paddingVertical: 15,
+    paddingHorizontal: 40,
+    borderRadius: 12,
+  },
+  cancelBtnText: { color: "#ef4444", fontWeight: "bold", fontSize: 18 },
   container: { flex: 1, backgroundColor: "#0f172a" },
   scrollContent: { padding: 20, alignItems: "center" },
   alertHeader: { alignItems: "center", marginVertical: 30 },
@@ -117,6 +275,7 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     marginTop: 10,
   },
+  subTextContainer: { height: 30, justifyContent: "center" },
   alertSub: { color: "#94a3b8", fontSize: 16 },
   cardContainer: { width: "100%", marginBottom: 30 },
   statusItem: {
@@ -139,12 +298,6 @@ const styles = StyleSheet.create({
   statusTextContainer: { flex: 1, marginLeft: 15 },
   statusTitle: { color: "#fff", fontSize: 16, fontWeight: "bold" },
   statusSubText: { color: "#94a3b8", fontSize: 12 },
-  recordingPulse: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: "#ef4444",
-  },
   callButton: {
     backgroundColor: "#166534",
     flexDirection: "row",

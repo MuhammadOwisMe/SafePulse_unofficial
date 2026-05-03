@@ -6,6 +6,7 @@ import {
   signOut,
   updateProfile,
 } from "firebase/auth";
+// Is line ko update karen
 import {
   ArrowLeft,
   Calendar,
@@ -202,10 +203,12 @@ export default function PersonalInfoScreen() {
             </View>
             <Text style={styles.title}>Personal Information</Text>
             <Text style={styles.subtitle}>Step 2 of 2: Profile Details</Text>
-            <div style={styles.pagination}>
+
+            {/* FIX: Yahan 'div' ki jagah 'View' use kiya gaya hai */}
+            <View style={styles.pagination}>
               <View style={styles.dot} />
               <View style={[styles.dot, styles.activeDot]} />
-            </div>
+            </View>
           </View>
 
           {/* Form Fields */}

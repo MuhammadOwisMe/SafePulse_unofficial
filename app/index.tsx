@@ -1,9 +1,15 @@
 import { useRouter } from "expo-router";
-import { signInWithEmailAndPassword, sendPasswordResetEmail, signOut } from "firebase/auth";
-import { Activity, Lock, Mail, Shield, Eye, EyeOff } from "lucide-react-native";
+import {
+  sendEmailVerification,
+  sendPasswordResetEmail,
+  signInWithEmailAndPassword,
+  signOut,
+} from "firebase/auth";
+import { Activity, Eye, EyeOff, Lock, Mail, Shield } from "lucide-react-native";
 import React, { useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -12,7 +18,6 @@ import {
   TextInput,
   TouchableOpacity,
   View,
-  Alert,
 } from "react-native";
 import { auth } from "../firebaseConfig";
 
@@ -23,6 +28,25 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const router = useRouter();
+
+  // --- NEW: Helper function to resend ONLY verification link ---
+  const handleResendVerification = async (user: any) => {
+    try {
+      setLoading(true);
+      await sendEmailVerification(user);
+      setLoading(false);
+      Alert.alert(
+        "Link Sent",
+        "A verification link has been sent to your email. Please check your inbox.",
+      );
+    } catch (e: any) {
+      setLoading(false);
+      Alert.alert(
+        "Error",
+        "Could not send verification email. Please try again later.",
+      );
+    }
+  };
 
   // --- 1. Login Logic with Verification Check ---
   const handleLogin = async () => {
@@ -37,21 +61,25 @@ export default function LoginScreen() {
       const userCredential = await signInWithEmailAndPassword(
         auth,
         email.toLowerCase().trim(),
-        password
+        password,
       );
 
       const user = userCredential.user;
 
-      // Verification Check updated to English
+      // Verification Check Logic
       if (!user.emailVerified) {
         setLoading(false);
         Alert.alert(
           "Email Not Verified",
           "Your email address has not been verified yet. Please check your inbox for the verification link.",
           [
-            { text: "Resend Email", onPress: () => handleForgotPassword() },
-            { text: "OK" }
-          ]
+            // FIX: handleForgotPassword ki jagah handleResendVerification use kiya
+            {
+              text: "Resend Email",
+              onPress: () => handleResendVerification(user),
+            },
+            { text: "OK" },
+          ],
         );
         await signOut(auth);
         return;
@@ -61,7 +89,6 @@ export default function LoginScreen() {
       router.replace("/home");
     } catch (e: any) {
       setLoading(false);
-      // Firebase error handling in English
       if (
         e.code === "auth/user-not-found" ||
         e.code === "auth/wrong-password" ||
@@ -76,7 +103,7 @@ export default function LoginScreen() {
     }
   };
 
-  // --- 2. Forgot Password Logic ---
+  // --- 2. Forgot Password Logic (Sirf password reset ke liye) ---
   const handleForgotPassword = async () => {
     if (!email) {
       setError("Please enter your email address to reset your password.");
@@ -88,8 +115,8 @@ export default function LoginScreen() {
       await sendPasswordResetEmail(auth, email.toLowerCase().trim());
       setLoading(false);
       Alert.alert(
-        "Link Sent", 
-        "A password reset link has been sent to your email address. Please check your inbox."
+        "Link Sent",
+        "A password reset link has been sent to your email address. Please check your inbox.",
       );
     } catch (e: any) {
       setLoading(false);
@@ -125,16 +152,23 @@ export default function LoginScreen() {
         <View style={styles.formContainer}>
           <Text style={styles.welcomeTitle}>Welcome Back</Text>
 
-          {/* Email */}
           <Text style={styles.label}>Email Address</Text>
-          <View style={[styles.inputContainer, error.toLowerCase().includes("email") && styles.inputError]}>
+          <View
+            style={[
+              styles.inputContainer,
+              error.toLowerCase().includes("email") && styles.inputError,
+            ]}
+          >
             <Mail size={20} color="#94a3b8" style={styles.icon} />
             <TextInput
               style={styles.input}
               placeholder="your.email@example.com"
               placeholderTextColor="#94a3b8"
               value={email}
-              onChangeText={(txt) => { setEmail(txt); setError(""); }}
+              onChangeText={(txt) => {
+                setEmail(txt);
+                setError("");
+              }}
               autoCapitalize="none"
               keyboardType="email-address"
             />
@@ -142,9 +176,13 @@ export default function LoginScreen() {
 
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
-          {/* Password */}
           <Text style={styles.label}>Password</Text>
-          <View style={[styles.inputContainer, error.toLowerCase().includes("password") && styles.inputError]}>
+          <View
+            style={[
+              styles.inputContainer,
+              error.toLowerCase().includes("password") && styles.inputError,
+            ]}
+          >
             <Lock size={20} color="#94a3b8" style={styles.icon} />
             <TextInput
               style={styles.input}
@@ -152,27 +190,39 @@ export default function LoginScreen() {
               placeholderTextColor="#94a3b8"
               secureTextEntry={!showPassword}
               value={password}
-              onChangeText={(txt) => { setPassword(txt); setError(""); }}
+              onChangeText={(txt) => {
+                setPassword(txt);
+                setError("");
+              }}
             />
             <TouchableOpacity onPress={() => setShowPassword(!showPassword)}>
-              {showPassword ? <EyeOff size={20} color="#94a3b8" /> : <Eye size={20} color="#94a3b8" />}
+              {showPassword ? (
+                <EyeOff size={20} color="#94a3b8" />
+              ) : (
+                <Eye size={20} color="#94a3b8" />
+              )}
             </TouchableOpacity>
           </View>
 
-          <TouchableOpacity onPress={handleForgotPassword} style={styles.forgotContainer}>
+          <TouchableOpacity
+            onPress={handleForgotPassword}
+            style={styles.forgotContainer}
+          >
             <Text style={styles.forgotText}>Forgot Password?</Text>
           </TouchableOpacity>
 
-          {/* Login Button */}
           <TouchableOpacity
             style={[styles.loginBtn, loading && { opacity: 0.7 }]}
             onPress={handleLogin}
             disabled={loading}
           >
-            {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.loginBtnText}>Login</Text>}
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.loginBtnText}>Login</Text>
+            )}
           </TouchableOpacity>
 
-          {/* Signup Redirect */}
           <TouchableOpacity
             style={styles.signupBtn}
             onPress={() => router.push("/signup")}
@@ -195,12 +245,23 @@ const styles = StyleSheet.create({
     borderBottomLeftRadius: 30,
     borderBottomRightRadius: 30,
   },
-  iconWrapper: { position: "relative", justifyContent: "center", alignItems: "center", marginBottom: 15 },
+  iconWrapper: {
+    position: "relative",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 15,
+  },
   pulsePosition: { position: "absolute", top: "50%", marginTop: -12 },
   logoText: { color: "#fff", fontSize: 32, fontWeight: "bold" },
   tagline: { color: "#94a3b8", fontSize: 14, marginTop: 5 },
   formContainer: { paddingHorizontal: 25, marginTop: 25 },
-  welcomeTitle: { fontSize: 24, fontWeight: "bold", color: "#111827", textAlign: "center", marginBottom: 25 },
+  welcomeTitle: {
+    fontSize: 24,
+    fontWeight: "bold",
+    color: "#111827",
+    textAlign: "center",
+    marginBottom: 25,
+  },
   label: { fontSize: 14, color: "#4B5563", marginBottom: 8, fontWeight: "600" },
   inputContainer: {
     flexDirection: "row",
@@ -213,13 +274,32 @@ const styles = StyleSheet.create({
     marginBottom: 15,
   },
   inputError: { borderColor: "#EF4444" },
-  errorText: { color: "#EF4444", fontSize: 12, marginBottom: 15, marginTop: -10 },
+  errorText: {
+    color: "#EF4444",
+    fontSize: 12,
+    marginBottom: 15,
+    marginTop: -10,
+  },
   icon: { marginRight: 10 },
   input: { flex: 1, color: "#111827" },
   forgotContainer: { alignSelf: "flex-end", marginBottom: 20 },
   forgotText: { color: "#2563EB", fontSize: 13, fontWeight: "600" },
-  loginBtn: { backgroundColor: "#2F7A33", height: 55, borderRadius: 12, justifyContent: "center", alignItems: "center", marginBottom: 12 },
+  loginBtn: {
+    backgroundColor: "#2F7A33",
+    height: 55,
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 12,
+  },
   loginBtnText: { color: "#fff", fontSize: 16, fontWeight: "bold" },
-  signupBtn: { backgroundColor: "#2563EB", height: 55, borderRadius: 12, justifyContent: "center", alignItems: "center", marginBottom: 30 },
+  signupBtn: {
+    backgroundColor: "#2563EB",
+    height: 55,
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 30,
+  },
   signupBtnText: { color: "#fff", fontSize: 16, fontWeight: "bold" },
 });
